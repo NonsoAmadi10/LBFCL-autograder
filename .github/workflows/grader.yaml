@@ -1,0 +1,91 @@
+name: Grade Bitcoin Submissions
+
+on:
+  push:
+    branches:
+      - week1
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, 3.10]
+    
+    services:
+      bitcoin:
+        image: ruimarinho/bitcoin-core:23.0
+        ports:
+          - 38332:38332
+          - 38333:38333
+        env:
+          BITCOIN_CHAIN: signet
+          BITCOIN_RPCUSER: ${{ secrets.BITCOIND_RPC_USER }}
+          BITCOIN_RPCPASSWORD: ${{ secrets.BITCOIND_RPC_PASSWORD }}
+          BITCOIN_PRUNE: 600
+        options: >-
+          --entrypoint bitcoind
+          -e BITCOIN_CHAIN=signet
+          -e BITCOIN_RPCUSER=${{ secrets.BITCOIND_RPC_USER }}
+          -e BITCOIN_RPCPASSWORD=${{ secrets.BITCOIND_RPC_PASSWORD }}
+          -e BITCOIN_PRUNE=600
+          -e BITCOIN_TXINDEX=0
+          -e BITCOIN_DB_CACHE=50
+
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Wait for bitcoind
+      run: |
+        echo "⏳ Waiting for bitcoind to be ready..."
+        timeout 300 bash -c 'until nc -z bitcoin 38332; do sleep 5; done'
+        echo "✅ bitcoind is ready!"
+
+    - name: Check bitcoind status
+      run: |
+        bitcoin-cli -rpcuser=${{ secrets.BITCOIND_RPC_USER }} -rpcpassword=${{ secrets.BITCOIND_RPC_PASSWORD }} -rpcport=38332 getblockchaininfo
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip packages
+      uses: actions/cache@v2
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 .
+
+    - name: Run tests
+      run: |
+        pip install pytest
+        pytest tests/
+
+    - name: Create .env file
+      run: |
+        echo "BITCOIND_RPC_USER=${{ secrets.BITCOIND_RPC_USER }}" >> .env
+        echo "BITCOIND_RPC_PASSWORD=${{ secrets.BITCOIND_RPC_PASSWORD }}" >> .env
+
+    - name: Run grading script
+      run: python grade_submissions.py
+      env:
+        BITCOIND_RPC_HOST: bitcoin
+        BITCOIND_RPC_PORT: 38332
+
+    - name: Upload grading results
+      uses: actions/upload-artifact@v2
+      with:
+        name: grades-python-${{ matrix.python-version }}
+        path: grades.json
